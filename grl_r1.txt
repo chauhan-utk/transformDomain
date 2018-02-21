@@ -1,0 +1,105 @@
+Train: Amazon
+Val: dslr
+
+Epoch 0/24
+----------
+Classification Loss: 2.3975 Domain Loss: 2.0033 Acc: 0.3536
+
+Epoch 1/24
+----------
+Classification Loss: 1.7542 Domain Loss: 1.9446 Acc: 0.5286
+
+Epoch 2/24
+----------
+Classification Loss: 1.4801 Domain Loss: 1.9449 Acc: 0.5946
+
+Epoch 3/24
+----------
+Classification Loss: 1.3851 Domain Loss: 1.9510 Acc: 0.6163
+
+Epoch 4/24
+----------
+Classification Loss: 1.3284 Domain Loss: 1.9461 Acc: 0.6408
+
+Epoch 5/24
+----------
+Classification Loss: 1.1663 Domain Loss: 1.9503 Acc: 0.6805
+
+Epoch 6/24
+----------
+Classification Loss: 1.1598 Domain Loss: 1.9507 Acc: 0.6805
+
+Epoch 7/24
+----------
+Classification Loss: 0.8873 Domain Loss: 1.9496 Acc: 0.7586
+
+Epoch 8/24
+----------
+Classification Loss: 0.7682 Domain Loss: 1.9381 Acc: 0.7923
+
+Epoch 9/24
+----------
+Classification Loss: 0.7341 Domain Loss: 1.9330 Acc: 0.8076
+
+Epoch 10/24
+----------
+Classification Loss: 0.6979 Domain Loss: 1.9476 Acc: 0.8108
+
+Epoch 11/24
+----------
+Classification Loss: 0.6866 Domain Loss: 1.9462 Acc: 0.8129
+
+Epoch 12/24
+----------
+Classification Loss: 0.6589 Domain Loss: 1.9467 Acc: 0.8250
+
+Epoch 13/24
+----------
+Classification Loss: 0.6202 Domain Loss: 1.9434 Acc: 0.8353
+
+Epoch 14/24
+----------
+Classification Loss: 0.6361 Domain Loss: 1.9447 Acc: 0.8214
+
+Epoch 15/24
+----------
+Classification Loss: 0.6550 Domain Loss: 1.9440 Acc: 0.8303
+
+Epoch 16/24
+----------
+Classification Loss: 0.6271 Domain Loss: 1.9429 Acc: 0.8324
+
+Epoch 17/24
+----------
+Classification Loss: 0.5883 Domain Loss: 1.9425 Acc: 0.8449
+
+Epoch 18/24
+----------
+Classification Loss: 0.5868 Domain Loss: 1.9424 Acc: 0.8381
+
+Epoch 19/24
+----------
+Classification Loss: 0.6016 Domain Loss: 1.9428 Acc: 0.8388
+
+Epoch 20/24
+----------
+Classification Loss: 0.6146 Domain Loss: 1.9438 Acc: 0.8381
+
+Epoch 21/24
+----------
+Classification Loss: 0.6158 Domain Loss: 1.9433 Acc: 0.8381
+
+Epoch 22/24
+----------
+Classification Loss: 0.6118 Domain Loss: 1.9430 Acc: 0.8349
+
+Epoch 23/24
+----------
+Classification Loss: 0.6200 Domain Loss: 1.9434 Acc: 0.8385
+
+Epoch 24/24
+----------
+Classification Loss: 0.6147 Domain Loss: 1.9438 Acc: 0.8342
+
+Training complete in 54m 51s
+Best val Acc: 0.844870
