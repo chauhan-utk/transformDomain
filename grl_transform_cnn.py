@@ -3,6 +3,7 @@
 from config import domainData
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
@@ -11,8 +12,6 @@ import torch.nn.functional as F
 import numpy as np
 import torchvision
 from torchvision import datasets, models, transforms
-get_ipython().magic('matplotlib inline')
-import matplotlib.pyplot as plt
 import time
 import os
 import copy
@@ -61,7 +60,7 @@ dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=4,
 dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
 class_names = image_datasets['train'].classes
 
-def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer, 
+def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
                 srcscheduler, tarscheduler, num_epochs=25):
     since = time.time()
 
@@ -70,12 +69,12 @@ def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
-        
+
         # 0 - source 1 - target
         srcdata = iter(dataloaders['train'])
         tardata = iter(dataloaders['val'])
         tardata = itertools.cycle(tardata) # generating target data without hassle
-        
+
         model.train() # training mode
         srcscheduler.step()
         tarscheduler.step()
@@ -89,9 +88,9 @@ def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
             # get the inputs
             srcinps, srclbls = data
             tarinps, tarlbls = next(tardata)
-            
+
             # wrap them in Variable
-            
+
             if use_gpu:
                 srcinps = Variable(srcinps.cuda())
                 srclbls = Variable(srclbls.cuda())
@@ -117,12 +116,12 @@ def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
 #             print("srclbls: ", srclbls)
             dmnloss = dmncriterion(srcoutput[0], dmnlbls)
             loss = clsloss + dmnloss
-            
+
             loss.backward()
             srcoptimizer.step()
-            
+
             taroptimizer.zero_grad()
-            
+
             # target data
             model.is_source = False
             taroutput = model(tarinps)
@@ -133,13 +132,13 @@ def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
             dmnloss2 = dmncriterion(taroutput[0], dmnlbls)
             dmnloss2.backward()
             taroptimizer.step()
-            
+
             # statistics
             running_clsloss += clsloss.data[0] * srcinps.size(0)
             running_dmnloss += dmnloss.data[0] * srcinps.size(0)
             running_dmnloss += dmnloss2.data[0] * tarinps.size(0)
             running_corrects += torch.sum(preds == srclbls.data)
-            
+
 
         epoch_clsloss = running_clsloss / dataset_sizes['train']
         epoch_dmnloss = running_dmnloss / (dataset_sizes['train'] + dataset_sizes['val'])
@@ -147,9 +146,9 @@ def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
 
         print('Classification Loss: {:.4f} Domain Loss: {:.4f} Acc: {:.4f}'.format(
         epoch_clsloss, epoch_dmnloss, epoch_acc))
-        
+
         if best_acc < epoch_acc:
-            best_acc = epoch_acc        
+            best_acc = epoch_acc
         print()
 
     time_elapsed = time.time() - since
@@ -166,15 +165,27 @@ class GRLModel(nn.Module):
         resnet18 = models.resnet18(pretrained=True)
         self.features = nn.Sequential(*list(resnet18.children())[:-2]) # get the feature extractor
         self.avgpool = nn.AvgPool2d(kernel_size=7, stride=1, padding=0, ceil_mode=False, count_include_pad=True)
-        self.transform = nn.Sequential(nn.Conv2d(512,64,5), nn.SELU(inplace=True), 
-                                       nn.ConvTranspose2d(64, 512, 5), nn.SELU(inplace=True))
+        self.transform = nn.Sequential(nn.Conv2d(512,64,5), nn.ReLU(inplace=True),
+                                       nn.ConvTranspose2d(64, 512, 5), nn.ReLU(inplace=True))
         self.is_source = True
         self.grl = nn.Sequential(
             nn.Linear(512,64), nn.ReLU(inplace=True),
             nn.Linear(64,2), nn.ReLU(inplace=True)
         )
         self.classifier = nn.Linear(512,31)
-        
+        #weight initialization
+        def weight_init(gen):
+            for x in gen:
+                if isinstance(x, nn.Conv2d) or isinstance(x, nn.ConvTranspose2d):
+                    init.xavier_uniform(x.weight, gain=np.sqrt(2))
+                    init.constant(x.bias, 0.1)
+                elif isinstance(x, nn.Linear):
+                    init.xavier_uniform(x.weight)
+                    init.constant(x.bias, 0.0)
+                    
+        weight_init(self.transform.modules())
+        weight_init(self.grl.modules())
+        weight_init(self.classifier.modules())
     def forward(self, x):
         if self.training:
             x = self.features(x)
@@ -187,7 +198,7 @@ class GRLModel(nn.Module):
             # x_ = x_.view(x_.size(0), -1)
             out1 = self.grl(x_)
             # x = x.view(x.size(0), -1)
-            out2 = self.classifier(x)        
+            out2 = self.classifier(x)
             return out1, out2
         else:
             x = self.features(x)
@@ -222,7 +233,7 @@ src_lr_scheduler = lr_scheduler.StepLR(srcoptimizer, step_size=7, gamma=0.1)
 tar_lr_scheduler = lr_scheduler.StepLR(taroptimizer, step_size=7, gamma=0.1)
 
 train_model(model_ft, clscriterion, dmncriterion, srcoptimizer, taroptimizer, src_lr_scheduler, tar_lr_scheduler,
-                       num_epochs=50)
+                       num_epochs=1)
 
 
 def test_model(model_ft, criterion, save_model=False, save_name=None):
@@ -236,7 +247,7 @@ def test_model(model_ft, criterion, save_model=False, save_name=None):
             lbl = lbl.cuda()
         img = Variable(img)
         lbl = Variable(lbl)
-        
+
         out = model_ft(img)
         _, preds = torch.max(out.data, 1)
         loss = criterion(out, lbl)
@@ -246,6 +257,6 @@ def test_model(model_ft, criterion, save_model=False, save_name=None):
     if save_model:
         torch.save(model_ft.state_dict(), save_name)
     return
-        
+
 save_name = "grl_model_with_transform.pth"
 test_model(model_ft, clscriterion, False, save_name)
