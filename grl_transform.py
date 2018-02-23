@@ -169,6 +169,18 @@ class GRLModel(nn.Module):
             nn.Linear(64,2), nn.ReLU(inplace=True)
         )
         self.classifier = nn.Linear(512,31)
+        def weight_init(gen):
+            for x in gen:
+                if isinstance(x, nn.Conv2d) or isinstance(x, nn.ConvTranspose2d):
+                    init.xavier_uniform(x.weight, gain=np.sqrt(2))
+                    init.constant(x.bias, 0.1)
+                elif isinstance(x, nn.Linear):
+                    init.xavier_uniform(x.weight)
+                    init.constant(x.bias, 0.0)
+                    
+        weight_init(self.transform.modules())
+        weight_init(self.grl.modules())
+        weight_init(self.classifier.modules())
 
     def forward(self, x):
         if self.training:
