@@ -1,5 +1,12 @@
 domainData = {
-    'amazon' : '/home/utkrsh/data/officeDataset/amazon/images/',
-    'dslr' : '/home/utkrsh/data/officeDataset/dslr/images/',
-    'webcam' : '/home/utkrsh/data/officeDataset/webcam/images/',
+    'amazon' : '/users/gpu/utkrsh/datasets/domain_adaptation/domain_adaptation_images/amazon/images/',
+    'dslr' : '/users/gpu/utkrsh/datasets/domain_adaptation/domain_adaptation_images/dslr/images/',
+    'webcam' : '/users/gpu/utkrsh/datasets/domain_adaptation/domain_adaptation_images/webcam/images/',
+    'vistrain' : '/new_data/gpu/utkrsh/visDAdata/train/',
+    'visval' : '/new_data/gpu/utkrsh/visDAdata/validation/'
+}
+
+num_classes = {
+    'office' : 31,
+    'visDA' : 12
 }

@@ -1,6 +1,7 @@
 # Code taken from here : http://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
 
 from config import domainData
+from config import num_classes as NUM_CLASSES
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -44,8 +45,10 @@ data_transforms = {
 }
 
 use_gpu = True and torch.cuda.is_available()
-train_dir = domainData['amazon'] # 'amazon', 'dslr', 'webcam'
+# 'amazon', 'dslr', 'webcam', 'vistrain', 'visval'
+train_dir = domainData['amazon']
 val_dir = domainData['webcam']
+num_classes = NUM_CLASSES['office'] # 'office', 'visDA'
 
 image_datasets = {'train' : datasets.ImageFolder(train_dir,
                                           data_transforms['train']),
@@ -165,7 +168,7 @@ class GRLModel(nn.Module):
             nn.Linear(512,64), nn.ReLU(inplace=True),
             nn.Linear(64,2), nn.ReLU(inplace=True)
         )
-        self.classifier = nn.Linear(512,31)
+        self.classifier = nn.Linear(512,num_classes)
 
     def forward(self, x):
         if self.training:

@@ -1,6 +1,7 @@
 # Code taken from here : http://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
 
 from config import domainData
+from config import num_classes as NUM_CLASSES
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -48,6 +49,7 @@ data_transforms = {
 use_gpu = True and torch.cuda.is_available()
 train_dir = domainData['amazon'] # 'amazon', 'dslr', 'webcam'
 val_dir = domainData['webcam']
+num_classes = NUM_CLASSES['office']
 
 image_datasets = {'train' : datasets.ImageFolder(train_dir,
                                           data_transforms['train']),
@@ -166,13 +168,13 @@ class GRLModel(nn.Module):
         self.features = nn.Sequential(*list(resnet18.children())[:-2]) # get the feature extractor
         self.avgpool = nn.AvgPool2d(kernel_size=7, stride=1, padding=0, ceil_mode=False, count_include_pad=True)
         self.transform = nn.Sequential(nn.Conv2d(512,64,5), nn.ReLU(inplace=True),
-                                       nn.ConvTranspose2d(64, 512, 5), nn.ReLU(inplace=True))
+                                       nn.Conv2d(64, 512, 3), nn.ReLU(inplace=True))
         self.is_source = True
         self.grl = nn.Sequential(
             nn.Linear(512,64), nn.ReLU(inplace=True),
             nn.Linear(64,2), nn.ReLU(inplace=True)
         )
-        self.classifier = nn.Linear(512,31)
+        self.classifier = nn.Linear(512,num_classes)
         #weight initialization
         def weight_init(gen):
             for x in gen:
@@ -182,7 +184,7 @@ class GRLModel(nn.Module):
                 elif isinstance(x, nn.Linear):
                     init.xavier_uniform(x.weight)
                     init.constant(x.bias, 0.0)
-                    
+
         weight_init(self.transform.modules())
         weight_init(self.grl.modules())
         weight_init(self.classifier.modules())
@@ -191,8 +193,9 @@ class GRLModel(nn.Module):
             x = self.features(x)
 #             x = x.view(x.size(0), -1)
             if not self.is_source:
-                x = self.transform(x)
-            x = self.avgpool(x)
+            	x = self.transform(x)
+            else:
+            	x = self.avgpool(x)
             x = x.view(x.size(0), -1)
             x_ = grl(x)
             # x_ = x_.view(x_.size(0), -1)
@@ -233,7 +236,7 @@ src_lr_scheduler = lr_scheduler.StepLR(srcoptimizer, step_size=7, gamma=0.1)
 tar_lr_scheduler = lr_scheduler.StepLR(taroptimizer, step_size=7, gamma=0.1)
 
 train_model(model_ft, clscriterion, dmncriterion, srcoptimizer, taroptimizer, src_lr_scheduler, tar_lr_scheduler,
-                       num_epochs=1)
+                       num_epochs=50)
 
 
 def test_model(model_ft, criterion, save_model=False, save_name=None):
