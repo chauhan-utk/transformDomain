@@ -13,7 +13,6 @@ import torch.nn.functional as F
 import numpy as np
 import torchvision
 from torchvision import datasets, models, transforms
-import matplotlib.pyplot as plt
 import time
 import os
 import copy
@@ -51,6 +50,10 @@ train_dir = domainData['amazon'] # 'amazon', 'dslr', 'webcam'
 val_dir = domainData['webcam']
 num_classes = NUM_CLASSES['office']
 print("use gpu: ", use_gpu)
+
+torch.manual_seed(7)
+if use_gpu:
+    torch.cuda.manual_seed(7)
 
 image_datasets = {'train' : datasets.ImageFolder(train_dir,
                                           data_transforms['train']),
@@ -222,7 +225,7 @@ src_params = []
 src_params += list(model_ft.features.parameters())
 src_params += list(model_ft.classifier.parameters())
 src_params += list(model_ft.grl.parameters())
-srcoptimizer = optim.SGD(src_params, lr=0.001, momentum=0.9) # optimize all parameters
+srcoptimizer = optim.SGD(src_params, lr=0.01, momentum=0.9) # optimize all parameters
 param_group = []
 param_group += list(model_ft.features.parameters())
 param_group += list(model_ft.transform.parameters())
