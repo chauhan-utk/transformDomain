@@ -18,7 +18,6 @@ import time
 import os
 import copy
 import itertools
-from se_module import SELayer
 
 class GRL(Function):
     @staticmethod
@@ -172,9 +171,7 @@ class GRLModel(nn.Module):
         self.features = nn.Sequential(*list(resnet18.children())[:-1]) # get the feature extractor
         self.transform = nn.Sequential(nn.Linear(512,64), nn.ReLU(inplace=True),
                                        nn.Linear(64,512), nn.ReLU(inplace=True))
-        # self.transform = SELayer(512)
         self.is_source = True
-        self.normalize = nn.BatchNorm1d(512)
         self.grl = nn.Sequential(
             nn.Linear(512,64), nn.ReLU(inplace=True),
             nn.Linear(64,2), nn.ReLU(inplace=True)
@@ -197,23 +194,17 @@ class GRLModel(nn.Module):
         if self.training:
             x = self.features(x)
             x = x.view(x.size(0), -1)
-            if self.is_source:
-                x = self.normalize(x)
+            if not self.is_source:
+                x = grl(x)
                 x = self.transform(x)
-            x_ = grl(x.clone())
             # x_ = x_.view(x_.size(0), -1)
-            out1 = self.grl(x_)
+            out1 = self.grl(x)
             # x = x.view(x.size(0), -1)
             out2 = self.classifier(x)
             return out1, out2
         else:
-            print("Evaluating model")
             x = self.features(x)
-            x = x.view(x.size(0), -1)
-            x = self.normalize(x)
-            # x = self.transform(x)
-            # print("x size: ", x.size())
-            out = self.classifier(x)
+            out = self.classifier(x.view(x.size(0),-1))
             return out
 
 
@@ -229,12 +220,11 @@ dmncriterion = nn.CrossEntropyLoss()
 src_params = []
 src_params += list(model_ft.features.parameters())
 src_params += list(model_ft.classifier.parameters())
-src_params += list(model_ft.transform.parameters())
 src_params += list(model_ft.grl.parameters())
-srcoptimizer = optim.SGD(model_ft.parameters(), lr=0.01, momentum=0.9) # optimize all parameters
+srcoptimizer = optim.SGD(src_params, lr=0.001, momentum=0.9) # optimize all parameters
 param_group = []
 param_group += list(model_ft.features.parameters())
-# param_group += list(model_ft.transform.parameters())
+param_group += list(model_ft.transform.parameters())
 param_group += list(model_ft.grl.parameters())
 taroptimizer = optim.SGD(param_group, lr=0.01, momentum=0.9)
 
