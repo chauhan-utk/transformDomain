@@ -46,9 +46,14 @@ data_transforms = {
 }
 
 use_gpu = True and torch.cuda.is_available()
-train_dir = domainData['amazon'] # 'amazon', 'dslr', 'webcam'
-val_dir = domainData['webcam']
+train_dir = domainData['webcam'] # 'amazon', 'dslr', 'webcam'
+val_dir = domainData['dslr']
 num_classes = NUM_CLASSES['office']
+print("use gpu: ", use_gpu)
+
+torch.manual_seed(7)
+if use_gpu:
+    torch.cuda.manual_seed(7)
 
 image_datasets = {'train' : datasets.ImageFolder(train_dir,
                                           data_transforms['train']),
@@ -228,7 +233,7 @@ src_lr_scheduler = lr_scheduler.StepLR(srcoptimizer, step_size=7, gamma=0.1)
 tar_lr_scheduler = lr_scheduler.StepLR(taroptimizer, step_size=7, gamma=0.1)
 
 train_model(model_ft, clscriterion, dmncriterion, srcoptimizer, taroptimizer, src_lr_scheduler, tar_lr_scheduler,
-                       num_epochs=50)
+                       num_epochs=15)
 
 def test_model(model_ft, criterion, save_model=False, save_name=None):
     data_iter = iter(dataloaders['val'])
@@ -253,4 +258,4 @@ def test_model(model_ft, criterion, save_model=False, save_name=None):
     return
 
 save_name = "grl_model_with_transform.pth"
-test_model(model_ft, clscriterion, True, save_name)
+test_model(model_ft, clscriterion, False, save_name)
