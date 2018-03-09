@@ -30,6 +30,18 @@ class GRL(Function):
         return grad_output
 grl = GRL.apply # create alias
 
+class ZERO(Function):
+    @staticmethod
+    def forward(ctx, x):
+        x = 1 * x
+        return x
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_output = 0 * grad_output
+        return grad_output
+
+zero = ZERO.apply
+
 data_transforms = {
     'train': transforms.Compose([
         transforms.RandomSizedCrop(224),
@@ -194,17 +206,19 @@ class GRLModel(nn.Module):
         if self.training:
             x = self.features(x)
             x = x.view(x.size(0), -1)
+            x_ = grl(x)
             if not self.is_source:
-                x = grl(x)
-                x = self.transform(x)
+                x_ = self.transform(x_)
             # x_ = x_.view(x_.size(0), -1)
-            out1 = self.grl(x)
+            out1 = self.grl(x_)
             # x = x.view(x.size(0), -1)
             out2 = self.classifier(x)
             return out1, out2
         else:
             x = self.features(x)
-            out = self.classifier(x.view(x.size(0),-1))
+            x = x.view(x.size(0),-1)
+            x = self.transform(x)
+            out = self.classifier(x)
             return out
 
 
@@ -221,10 +235,10 @@ src_params = []
 src_params += list(model_ft.features.parameters())
 src_params += list(model_ft.classifier.parameters())
 src_params += list(model_ft.grl.parameters())
-srcoptimizer = optim.SGD(src_params, lr=0.001, momentum=0.9) # optimize all parameters
+srcoptimizer = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9) # optimize all parameters
 param_group = []
 param_group += list(model_ft.features.parameters())
-param_group += list(model_ft.transform.parameters())
+# param_group += list(model_ft.transform.parameters())
 param_group += list(model_ft.grl.parameters())
 taroptimizer = optim.SGD(param_group, lr=0.01, momentum=0.9)
 
@@ -233,7 +247,7 @@ src_lr_scheduler = lr_scheduler.StepLR(srcoptimizer, step_size=7, gamma=0.1)
 tar_lr_scheduler = lr_scheduler.StepLR(taroptimizer, step_size=7, gamma=0.1)
 
 train_model(model_ft, clscriterion, dmncriterion, srcoptimizer, taroptimizer, src_lr_scheduler, tar_lr_scheduler,
-                       num_epochs=25)
+                       num_epochs=10)
 
 def test_model(model_ft, criterion, save_model=False, save_name=None):
     data_iter = iter(dataloaders['val'])
