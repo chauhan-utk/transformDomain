@@ -2,8 +2,11 @@
 
 from config import domainData
 from config import num_classes as NUM_CLASSES
+from advDomain import ADVDomain
+from logger import Logger
 import torch
 import torch.nn as nn
+import torch.autograd as autograd
 import torch.nn.init as init
 import torch.optim as optim
 from torch.optim import lr_scheduler
@@ -13,22 +16,11 @@ import torch.nn.functional as F
 import numpy as np
 import torchvision
 from torchvision import datasets, models, transforms
-import matplotlib.pyplot as plt
 import time
 import os
 import copy
 import itertools
-
-class GRL(Function):
-    @staticmethod
-    def forward(ctx, x):
-        x = 1 * x
-        return x
-    @staticmethod
-    def backward(ctx, grad_output):
-        grad_output = -1 * grad_output
-        return grad_output
-grl = GRL.apply # create alias
+from tqdm import *
 
 data_transforms = {
     'train': transforms.Compose([
@@ -46,9 +38,15 @@ data_transforms = {
 }
 
 use_gpu = True and torch.cuda.is_available()
-train_dir = domainData['webcam'] # 'amazon', 'dslr', 'webcam'
-val_dir = domainData['dslr']
+train_dir = domainData['amazon'] # 'amazon', 'dslr', 'webcam'
+val_dir = domainData['webcam']
 num_classes = NUM_CLASSES['office']
+gp_lambda = 0.1
+batch_size = 32
+load_cls = True
+log = True
+if log:
+    logger = Logger('./logs')
 print("use gpu: ", use_gpu)
 
 torch.manual_seed(7)
@@ -60,19 +58,48 @@ image_datasets = {'train' : datasets.ImageFolder(train_dir,
                   'val' : datasets.ImageFolder(val_dir,
                                           data_transforms['val'])
                  }
-dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=32,
-                                             shuffle=True, num_workers=4)
+dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size,
+                                             shuffle=True, num_workers=0, drop_last=True)
               for x in ['train', 'val']}
 dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
 class_names = image_datasets['train'].classes
 
-def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
-                srcscheduler, tarscheduler, num_epochs=25):
+model_ft = ADVDomain(num_classes)
+
+if load_cls:
+    model_ft.load_cls()
+
+if use_gpu:
+    model_ft = model_ft.cuda()
+
+clscriterion = nn.CrossEntropyLoss()
+
+param_group = [
+{'params' : model_ft.features.parameters(), 'lr' : 1e-4, 'betas' : (0.5, 0.9)},
+{'params' : model_ft.classifier.parameters(), 'lr' : 1e-5, 'betas' : (0.5, 0.9)},
+{'params' : model_ft._discriminator.parameters(), 'lr' : 1e-4, 'betas' : (0.5, 0.9)}
+]
+opt = optim.Adam(param_group)
+
+# opt = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+
+# Decay LR by a factor of 0.1 every 7 epochs
+# tar_lr_scheduler = lr_scheduler.StepLR(taroptimizer, step_size=7, gamma=0.1)
+
+
+def train_model(model, clscriterion, optimizer, lr_scheduler=None, num_epochs=25):
     since = time.time()
 
     best_acc = 0.0
+    all_acc = []
 
-    for epoch in range(num_epochs):
+    gen_params = []
+    gen_params += list(model.features.parameters())
+    gen_params += list(model.classifier.parameters())
+
+    dis_params = list(model._discriminator.parameters())
+
+    for epoch in tqdm(range(num_epochs)):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
 
@@ -82,8 +109,8 @@ def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
         tardata = itertools.cycle(tardata) # generating target data without hassle
 
         model.train() # training mode
-        srcscheduler.step()
-        tarscheduler.step()
+        if lr_scheduler:
+            lr_scheduler.step()
 
         running_clsloss = 0.0
         running_dmnloss = 0.0
@@ -93,7 +120,7 @@ def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
         for data in srcdata:
             # get the inputs
             srcinps, srclbls = data
-            tarinps, tarlbls = next(tardata)
+            tarinps, _ = next(tardata)
 
             # wrap them in Variable
 
@@ -101,57 +128,80 @@ def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
                 srcinps = Variable(srcinps.cuda())
                 srclbls = Variable(srclbls.cuda())
                 tarinps = Variable(tarinps.cuda())
-                tarlbls = Variable(tarlbls.cuda())
             else:
                 srcinps, srclbls = Variable(srcinps), Variable(srclbls)
-                tarinps, tarlbls = Variable(tarinps), Variable(tarlbls)
+                tarinps = Variable(tarinps)
 
-            # zero the parameter gradients
-            srcoptimizer.zero_grad()
+            x_inter, d_inter, D_, D, cls_out = model(srcinps, tarinps)
 
-            # source data
-            model.is_source = True
-            srcoutput = model(srcinps)
-            dmnlbls = torch.LongTensor(srcoutput[0].size(0)).zero_()
+            d_l = (torch.sigmoid(D_)**2) + ((1. - torch.sigmoid(D))**2)
+            g_l = D - D_
+
+            assert d_inter.dim() == 2, "d_inter dim: %s" % str(d_inter.dim())
+            ones = torch.ones(d_inter.size())
             if use_gpu:
-                dmnlbls = dmnlbls.cuda()
-            dmnlbls = Variable(dmnlbls, requires_grad=False)
-            _, preds = torch.max(srcoutput[1].data, 1)
-            clsloss = clscriterion(srcoutput[1], srclbls)
+                ones = ones.cuda()
+            x_inter_grads = autograd.grad(d_inter, x_inter, grad_outputs=ones, retain_graph=True)[0]
+
+            x_inter_grads.volatile = False
+            x_inter_grads.requires_grad = True
+            x_inter_grads = x_inter_grads ** 2
+            slopes = torch.sqrt(x_inter_grads.view(x_inter_grads.size(0), -1))
+            gp_loss = ((slopes - 1.) ** 2).mean() * gp_lambda
+
+            # TODO: gp_loss should remain part of graph?
+            d_loss = d_l + gp_loss
+
+            _, preds = torch.max(cls_out.data, 1)
+            clsloss = clscriterion(cls_out, srclbls)
 #             print("lblb: ", srcoutput[0])
 #             print("srclbls: ", srclbls)
-            dmnloss = dmncriterion(srcoutput[0], dmnlbls)
-            loss = clsloss + dmnloss
 
-            loss.backward()
-            srcoptimizer.step()
+            model.zero_grad() # zero all grads
 
-            taroptimizer.zero_grad()
-
-            # target data
-            model.is_source = False
-            taroutput = model(tarinps)
-            dmnlbls = torch.ones(taroutput[0].size(0)).long()
+            # grads for _discriminator only
+            for x in gen_params:
+                x.requires_grad = False
+            for x in dis_params:
+                x.requires_grad = True
+            ones = torch.ones(d_l.size())
             if use_gpu:
-                dmnlbls = dmnlbls.cuda()
-            dmnlbls = Variable(dmnlbls, requires_grad=False)
-            dmnloss2 = dmncriterion(taroutput[0], dmnlbls)
-            dmnloss2.backward()
-            taroptimizer.step()
+                ones = ones.cuda()
+            d_loss.backward(ones, retain_graph=True)
+
+            # grads for generator and classifier network
+            for x in gen_params:
+                x.requires_grad = True
+            for x in dis_params:
+                x.requires_grad = False
+            ones = torch.ones(g_l.size())
+            if use_gpu:
+                ones = ones.cuda()
+            g_l.backward(ones, retain_graph=True) # compute generator gradients
+
+            # compute grads and release graph
+            clsloss.backward()
+
+            optimizer.step()
 
             # statistics
             running_clsloss += clsloss.data[0] * srcinps.size(0)
-            running_dmnloss += dmnloss.data[0] * srcinps.size(0)
-            running_dmnloss += dmnloss2.data[0] * tarinps.size(0)
+            # running_dmnloss += dmnloss.data[0] * srcinps.size(0)
+            # running_dmnloss += dmnloss2.data[0] * tarinps.size(0)
             running_corrects += torch.sum(preds == srclbls.data)
 
 
         epoch_clsloss = running_clsloss / dataset_sizes['train']
-        epoch_dmnloss = running_dmnloss / (dataset_sizes['train'] + dataset_sizes['val'])
+        # epoch_dmnloss = running_dmnloss / (dataset_sizes['train'] + dataset_sizes['val'])
         epoch_acc = running_corrects / dataset_sizes['train']
 
-        print('Classification Loss: {:.4f} Domain Loss: {:.4f} Acc: {:.4f}'.format(
-        epoch_clsloss, epoch_dmnloss, epoch_acc))
+        print('Classification Loss: {:.4f} Acc: {:.4f}'.format(
+        epoch_clsloss, epoch_acc))
+        if log:
+            logger.scalar_summary("loss", epoch_clsloss, epoch)
+            logger.scalar_summary("accuracy", epoch_acc, epoch)
+
+        all_acc += [epoch_acc]
 
         if best_acc < epoch_acc:
             best_acc = epoch_acc
@@ -161,79 +211,11 @@ def train_model(model, clscriterion, dmncriterion, srcoptimizer, taroptimizer,
     print('Training complete in {:.0f}m {:.0f}s'.format(
         time_elapsed // 60, time_elapsed % 60))
     print('Best val Acc: {:4f}'.format(best_acc))
+    print('Mean Acc: {:4f}'.format(np.mean(all_acc)))
 
     return
 
-class GRLModel(nn.Module):
-    def __init__(self):
-        super(GRLModel, self).__init__()
-        resnet18 = models.resnet18(pretrained=True)
-        self.features = nn.Sequential(*list(resnet18.children())[:-1]) # get the feature extractor
-        self.transform = nn.Sequential(nn.Linear(512,64), nn.ReLU(inplace=True),
-                                       nn.Linear(64,512), nn.ReLU(inplace=True))
-        self.is_source = True
-        self.grl = nn.Sequential(
-            nn.Linear(512,64), nn.ReLU(inplace=True),
-            nn.Linear(64,2), nn.ReLU(inplace=True)
-        )
-        self.classifier = nn.Linear(512,num_classes)
-        def weight_init(gen):
-            for x in gen:
-                if isinstance(x, nn.Conv2d) or isinstance(x, nn.ConvTranspose2d):
-                    init.xavier_uniform(x.weight, gain=np.sqrt(2))
-                    init.constant(x.bias, 0.1)
-                elif isinstance(x, nn.Linear):
-                    init.xavier_uniform(x.weight)
-                    init.constant(x.bias, 0.0)
-
-        weight_init(self.transform.modules())
-        weight_init(self.grl.modules())
-        weight_init(self.classifier.modules())
-
-    def forward(self, x):
-        if self.training:
-            x = self.features(x)
-            x = x.view(x.size(0), -1)
-            if not self.is_source:
-                x = self.transform(x)
-            x_ = grl(x)
-            # x_ = x_.view(x_.size(0), -1)
-            out1 = self.grl(x_)
-            # x = x.view(x.size(0), -1)
-            out2 = self.classifier(x)
-            return out1, out2
-        else:
-            x = self.features(x)
-            out = self.classifier(x.view(x.size(0),-1))
-            return out
-
-
-
-model_ft = GRLModel()
-
-if use_gpu:
-    model_ft = model_ft.cuda()
-
-clscriterion = nn.CrossEntropyLoss()
-dmncriterion = nn.CrossEntropyLoss()
-
-src_params = []
-src_params += list(model_ft.features.parameters())
-src_params += list(model_ft.classifier.parameters())
-src_params += list(model_ft.grl.parameters())
-srcoptimizer = optim.SGD(src_params, lr=0.001, momentum=0.9) # optimize all parameters
-param_group = []
-param_group += list(model_ft.features.parameters())
-param_group += list(model_ft.transform.parameters())
-param_group += list(model_ft.grl.parameters())
-taroptimizer = optim.SGD(param_group, lr=0.01, momentum=0.9)
-
-# Decay LR by a factor of 0.1 every 7 epochs
-src_lr_scheduler = lr_scheduler.StepLR(srcoptimizer, step_size=7, gamma=0.1)
-tar_lr_scheduler = lr_scheduler.StepLR(taroptimizer, step_size=7, gamma=0.1)
-
-train_model(model_ft, clscriterion, dmncriterion, srcoptimizer, taroptimizer, src_lr_scheduler, tar_lr_scheduler,
-                       num_epochs=15)
+train_model(model_ft, clscriterion, opt, num_epochs=5)
 
 def test_model(model_ft, criterion, save_model=False, save_name=None):
     data_iter = iter(dataloaders['val'])
@@ -247,7 +229,7 @@ def test_model(model_ft, criterion, save_model=False, save_name=None):
         img = Variable(img)
         lbl = Variable(lbl)
 
-        out = model_ft(img)
+        out = model_ft(img, None)
         _, preds = torch.max(out.data, 1)
         loss = criterion(out, lbl)
         acc_val += torch.sum(preds == lbl.data)

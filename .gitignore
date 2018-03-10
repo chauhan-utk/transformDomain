@@ -94,6 +94,7 @@ venv.bak/
 # not ready
 checkVisDA.py
 *.pth
+logs/
 
 # Spyder project settings
 .spyderproject
