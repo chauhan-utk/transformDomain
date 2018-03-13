@@ -34,6 +34,7 @@ class ADVDomain(nn.Module):
         activation_fn = nn.ReLU(inplace=True)
         self.num_classes = num_classes
         self.eps = eps
+        self.cls_train = False
         self._discriminator = _Discriminator()
         # self.normalize = RangeNormalize(-1,1)
         self.classifier = nn.Sequential(
@@ -113,17 +114,22 @@ class ADVDomain(nn.Module):
         if self.training:
             # assert x_t != None, "give target input for training"
             # print(type(x_s), type(x_t))
-            X = self.features(x_s) # X
-            G = self.features(x_t) # G
-            # X_n = self.normalize(X)
-            # G_n = self.normalize(G)
-            D_ = self._discriminator(G)
-            D = self._discriminator(X)
-            x_inter = self._interpolate(X.data, G.data, self.eps)
-            x_inter = Variable(x_inter, requires_grad=True)
-            d_inter = self._discriminator(x_inter)
-            out = self.classifier(X)
-            return x_inter,d_inter,D_,D,out
+            if not self.cls_train:
+                X = self.features(x_s) # X
+                G = self.features(x_t) # G
+                # X_n = self.normalize(X)
+                # G_n = self.normalize(G)
+                D_ = self._discriminator(G)
+                D = self._discriminator(X)
+                x_inter = self._interpolate(X.data, G.data, self.eps)
+                x_inter = Variable(x_inter, requires_grad=True)
+                d_inter = self._discriminator(x_inter)
+                return x_inter,d_inter,D_,D
+            else:
+                X = self.features(x_s)
+                out = self.classifier(X)
+                return out
+            
         else:
             x_s = self.features(x_s)
             out = self.classifier(x_s)

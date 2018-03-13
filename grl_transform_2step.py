@@ -37,6 +37,11 @@ data_transforms = {
     ]),
 }
 
+def get_log_dir(path, log_dir):
+    path = path + '/' + log_dir
+    os.makedirs(path, exist_ok=True)
+    return path
+
 use_gpu = True and torch.cuda.is_available()
 train_dir = domainData['amazon'] # 'amazon', 'dslr', 'webcam'
 val_dir = domainData['webcam']
@@ -45,8 +50,10 @@ gp_lambda = 0.1
 batch_size = 32
 load_cls = True
 log = False
+exp_name = 'cls_ft_train_2step_adv_wt_schedule_150_epoch'
 if log:
-    logger = Logger('./logs')
+    log_dir = get_log_dir('./logs', exp_name)
+    logger = Logger(log_dir)
 print("use gpu: ", use_gpu)
 
 torch.manual_seed(7)
@@ -75,10 +82,14 @@ if use_gpu:
 clscriterion = nn.CrossEntropyLoss()
 
 param_group = [
-{'params' : model_ft.features.parameters(), 'lr' : 1e-4, 'betas' : (0.5, 0.9)},
 {'params' : model_ft._discriminator.parameters(), 'lr' : 1e-4, 'betas' : (0.5, 0.9)}
 ]
-adv_opt = optim.Adam(param_group)
+disc_opt = optim.Adam(param_group)
+
+param_group = [
+{'params' : model_ft.features.parameters(), 'lr' : 1e-4, 'betas' : (0.5, 0.9)}
+]
+gen_opt = optim.Adam(param_group)
 
 param_group = [
 {'params' : model_ft.features.parameters(), 'lr' : 1e-4, 'betas' : (0.5, 0.9)},
@@ -91,15 +102,16 @@ cls_opt = optim.Adam(param_group)
 # tar_lr_scheduler = lr_scheduler.StepLR(taroptimizer, step_size=7, gamma=0.1)
 
 
-def train_model(model, clscriterion, adv_opt, cls_opt, lr_scheduler=None, num_epochs=25):
+def train_model(model, clscriterion, disc_opt, gen_opt, cls_opt, lr_scheduler=None, num_epochs=25):
     since = time.time()
 
     best_acc = 0.0
     all_acc = []
 
-    gen_params = list(model.features.parameters())
-    cls_params = list(model.classifier.parameters())
-    dis_params = list(model._discriminator.parameters())
+    # gen_params = list(model.features.parameters())
+    # cls_params = list(model.classifier.parameters())
+    # dis_params = list(model._discriminator.parameters())
+
 
     for epoch in tqdm(range(num_epochs)):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
@@ -116,7 +128,11 @@ def train_model(model, clscriterion, adv_opt, cls_opt, lr_scheduler=None, num_ep
 
         running_clsloss = 0.0
         running_gloss = 0.0
+        running_dloss = 0.0
         running_corrects = 0
+
+        P = epoch / num_epochs
+        lmbd = 2. / (1. + np.exp(-10. * P)) - 1
 
         # Iterate over data.
         for data in srcdata:
@@ -134,7 +150,8 @@ def train_model(model, clscriterion, adv_opt, cls_opt, lr_scheduler=None, num_ep
                 srcinps, srclbls = Variable(srcinps), Variable(srclbls)
                 tarinps = Variable(tarinps)
 
-            x_inter, d_inter, D_, D, cls_out = model(srcinps, tarinps)
+            model.cls_train = False
+            x_inter, d_inter, D_, D = model(srcinps, tarinps)
 
             d_l = (torch.sigmoid(D_)**2) + ((1. - torch.sigmoid(D))**2)
             
@@ -165,52 +182,34 @@ def train_model(model, clscriterion, adv_opt, cls_opt, lr_scheduler=None, num_ep
             # TODO: gp_loss should remain part of graph?
             d_loss = d_l + gp_loss
 
+            model.zero_grad()
+
+            d_loss = d_loss.mean() * lmbd
+            running_dloss += d_loss.data[0] * srcinps.size(0)
+            d_loss.backward(retain_graph=True)
+            disc_opt.step()
+
+            model.zero_grad()
+
+            g_l = g_l.mean() * lmbd
+            running_gloss += g_l.data[0] * srcinps.size(0)
+            g_l.backward()
+            gen_opt.step()
+
+            model.cls_train = True
+            cls_out = model(srcinps, None)
+
             _, preds = torch.max(cls_out.data, 1)
             clsloss = clscriterion(cls_out, srclbls)
 #             print("lblb: ", srcoutput[0])
 #             print("srclbls: ", srclbls)
 
             model.zero_grad() # zero all grads
-
-            # grads for _discriminator only
-            for x in gen_params:
-                x.requires_grad = False
-            for x in cls_params:
-                x.requires_grad = False
-            for x in dis_params:
-                x.requires_grad = True
-            ones = torch.ones(d_l.size())
-            if use_gpu:
-                ones = ones.cuda()
-            d_loss = d_loss.mean()
-            d_loss.backward(retain_graph=True)
-
-            # grads for generator and classifier network
-            for x in gen_params:
-                x.requires_grad = True 
-            for x in dis_params:
-                x.requires_grad = False
-            ones = torch.ones(g_l.size())
-            if use_gpu:
-                ones = ones.cuda()
-            g_l = g_l.mean()
-            g_l.backward(retain_graph=True) # compute generator gradients
-
-            # compute grads and release graph
-            for x in gen_params:
-                x.requires_grad = False
-            for x in dis_params:
-                x.requires_grad = False
-            for x in cls_params:
-                x.requires_grad = True
-
             clsloss.backward()
-
-            optimizer.step()
+            cls_opt.step()
 
             # statistics
             running_clsloss += clsloss.data[0] * srcinps.size(0)
-            running_gloss += g_l.data[0] * srcinps.size(0)
             # running_dmnloss += dmnloss.data[0] * srcinps.size(0)
             # running_dmnloss += dmnloss2.data[0] * tarinps.size(0)
             running_corrects += torch.sum(preds == srclbls.data)
@@ -218,7 +217,7 @@ def train_model(model, clscriterion, adv_opt, cls_opt, lr_scheduler=None, num_ep
 
         epoch_clsloss = running_clsloss / dataset_sizes['train']
         epoch_gloss = running_gloss / dataset_sizes['train']
-        # epoch_dmnloss = running_dmnloss / (dataset_sizes['train'] + dataset_sizes['val'])
+        epoch_dloss = running_dloss / dataset_sizes['train']
         epoch_acc = running_corrects / dataset_sizes['train']
 
         print('Classification Loss: {:.4f} Acc: {:.4f}'.format(
@@ -229,6 +228,7 @@ def train_model(model, clscriterion, adv_opt, cls_opt, lr_scheduler=None, num_ep
             logger.scalar_summary("loss", epoch_clsloss, epoch)
             logger.scalar_summary("accuracy", epoch_acc, epoch)
             logger.scalar_summary("gloss", epoch_gloss, epoch)
+            logger.scalar_summary("dloss", epoch_dloss, epoch)
 
         all_acc += [epoch_acc]
 
@@ -244,7 +244,7 @@ def train_model(model, clscriterion, adv_opt, cls_opt, lr_scheduler=None, num_ep
 
     return
 
-train_model(model_ft, clscriterion, opt, num_epochs=3)
+train_model(model_ft, clscriterion, disc_opt, gen_opt, cls_opt, num_epochs=1)
 
 def test_model(model_ft, criterion, save_model=False, save_name=None):
     data_iter = iter(dataloaders['val'])
