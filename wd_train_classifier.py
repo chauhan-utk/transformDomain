@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.optim as optim
+from logger import Logger
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.autograd import Function
@@ -35,10 +36,26 @@ data_transforms = {
     ]),
 }
 
+def get_log_dir(path, log_dir):
+    path = path + '/' + log_dir
+    os.makedirs(path, exist_ok=True)
+    return path
+
 use_gpu = True and torch.cuda.is_available()
 train_dir = domainData['amazon'] # 'amazon', 'dslr', 'webcam'
 val_dir = domainData['webcam']
 num_classes = NUM_CLASSES['office']
+
+log = False
+exp_name = 'wd_jstCls_Rsnt2blk'
+if log:
+    log_dir = get_log_dir('./logs', exp_name)
+    logger = Logger(log_dir)
+print("use gpu: ", use_gpu)
+
+torch.manual_seed(7)
+if use_gpu:
+    torch.cuda.manual_seed(7)
 
 image_datasets = {'train' : datasets.ImageFolder(train_dir,
                                           data_transforms['train']),
@@ -117,6 +134,10 @@ def train_model(model, clscriterion, optimizer, num_epochs=15):
     print('Best val Acc: {:4f}'.format(best_acc))
     print('Mean Acc: {:4f}'.format(np.mean(all_acc)))
 
+    if log:
+        logger.scalar_summary("loss", epoch_clsloss, epoch)
+        logger.scalar_summary("accuracy", epoch_acc, epoch)
+
     return
 
 
@@ -125,7 +146,7 @@ class _Features(nn.Module):
         super(_Features, self).__init__()
         self.basenet = None
         self.extra = None
-        self.config = 3
+        self.config = 2
         if self.config == 1:
             self.basenet = nn.Sequential(nn.Conv2d(3,16,4,stride=2), nn.ReLU(inplace=True), nn.Conv2d(16,24,3,2), nn.ReLU(inplace=True), nn.Conv2d(24,32,3,2), nn.ReLU(inplace=True), nn.Conv2d(32,64,5,2), nn.ReLU(inplace=True), nn.Conv2d(64,128,5,2), nn.ReLU(inplace=True), nn.Conv2d(128,512,4,2), nn.ReLU(inplace=True))
             # train: 0.57, val: 0.40
