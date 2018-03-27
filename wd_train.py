@@ -49,7 +49,7 @@ num_classes = NUM_CLASSES['office']
 gp_lambda = 10
 batch_size = 32
 load_cls = False
-D_train_num = 5
+D_train_num = 7
 log = False
 exp_name = 'wd_tr_'
 if log:
@@ -161,18 +161,20 @@ def train_model(model, clscriterion, disc_opt, cls_opt, lr_scheduler=None, num_e
             tarinps, _ = next(tardata)
 
             if use_gpu:
-                srcinps = Variable(srcinps.cuda())
-                srclbls = Variable(srclbls.cuda())
-                tarinps = Variable(tarinps.cuda())
+                srcinps = Variable(srcinps.cuda(), requires_grad=True)
+                srclbls = Variable(srclbls.cuda(), requires_grad=False)
+                tarinps = Variable(tarinps.cuda(), requires_grad=False)
             else:
-                srcinps, srclbls = Variable(srcinps), Variable(srclbls)
-                tarinps = Variable(tarinps)
+                srcinps, srclbls = Variable(srcinps, requires_grad=True), Variable(srclbls, requires_grad=False)
+                tarinps = Variable(tarinps, requires_grad=False)
 
             model.cls_train = False
             running_gploss_inner = 0.0
             running_dloss_inner = 0.0
             for _ in range(D_train_num):
                 X, G, D_, D = model(srcinps, tarinps)
+                # G = model.features(tarinps)
+                # X = model.features(srcinps)
                 disc_opt.zero_grad()
                 eps = torch.Tensor(X.size(0),1).uniform_(0,1)
                 if X.is_cuda:
@@ -181,9 +183,7 @@ def train_model(model, clscriterion, disc_opt, cls_opt, lr_scheduler=None, num_e
                 X_inter = X + eps * (G - X)
                 D_inter = model._discriminator(X_inter)
                 # def hook(m, g_in, g_out):
-                #     nonlocal running_dgrads
-                #     tmp = torch.sum(torch.abs(g_in[0]))
-                #     running_dgrads += tmp
+                #     print("grads norm: ", torch.norm(g_in[0],1))
                 # model._discriminator.register_backward_hook(hook)
                 ones = torch.ones(D_inter.size())
                 if use_gpu:
@@ -195,6 +195,9 @@ def train_model(model, clscriterion, disc_opt, cls_opt, lr_scheduler=None, num_e
                 X_inter_grads = X_inter_grads ** 2
                 slopes = torch.sqrt((X_inter_grads.view(X_inter_grads.size(0), -1)).sum(-1))
                 gp_loss = ((slopes - 1.) ** 2).mean()
+
+                # model._discriminator.register_backward_hook(hook)
+
 
                 d_l = (torch.sigmoid(D_)**2) + ((1. - torch.sigmoid(D))**2)
                 d_l = d_l.mean()
@@ -210,9 +213,12 @@ def train_model(model, clscriterion, disc_opt, cls_opt, lr_scheduler=None, num_e
             model.cls_train = True
             D_, D, cls_out = model(srcinps, tarinps)
             g_l = (D - D_).mean()
+            # loss = nn.L1Loss()
+            # g_l = loss(D_, D.detach())
+
             _, preds = torch.max(cls_out.data, 1)
             clsloss = clscriterion(cls_out, srclbls)
-            total_loss = clsloss * 0.9 + g_l * 0.5 * lmbda
+            total_loss = clsloss * 0.9 + g_l * 0.1 * lmbda
             cls_opt.zero_grad()
             total_loss.backward()
             cls_opt.step()
@@ -255,7 +261,7 @@ def train_model(model, clscriterion, disc_opt, cls_opt, lr_scheduler=None, num_e
 
     return
 
-train_model(model_ft, clscriterion, disc_opt, cls_opt, num_epochs=5)
+train_model(model_ft, clscriterion, disc_opt, cls_opt, num_epochs=15)
 
 save_name = "grl_model_with_transform.pth"
 test_model(model_ft, clscriterion, False, save_name)

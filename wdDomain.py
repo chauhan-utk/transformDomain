@@ -15,7 +15,7 @@ class _Discriminator(nn.Module):
         super(_Discriminator, self).__init__()
         activation_fn = nn.ReLU(inplace=True)
         self.net = nn.Sequential(
-            nn.Linear(512,1)
+            nn.Linear(512,1, bias=False)
         )
 
     def forward(self, x):
@@ -28,11 +28,24 @@ class _Features(nn.Module):
     """
     def __init__(self):
         super(_Features, self).__init__()
+        resnet = models.resnet18(pretrained=True)
+        params = []
+        params += list(resnet.conv1.parameters())
+        params += list(resnet.bn1.parameters())
+        params += list(resnet.layer1.parameters())
+        params += list(resnet.layer2.parameters())
+        params += list(resnet.layer3.parameters())
         activation_fn = nn.ReLU(inplace=True)
-        self.basenet = nn.Sequential(flatten(), nn.Linear(3*224*224, 512), nn.ReLU(inplace=True))
+        for x in params:
+                x.requires_grad=False
+        resnet.fc = flatten()
+        self.basenet = resnet
+        self.extra = None
         
     def forward(self, x):
         x = self.basenet(x)
+        if self.extra:
+            x = self.extra(x)
         return x
 
 class _Classifier(nn.Module):
@@ -55,7 +68,7 @@ class WDDomain(nn.Module):
         self.eps = eps
         self.cls_train = False
         self._discriminator = _Discriminator()
-        # self.normalize = RangeNormalize(-1,1)
+        self.normalize = RangeNormalize(-1,1)
         self.classifier = _Classifier(self.num_classes)
         def weight_init(gen):
             for x in gen:
@@ -68,8 +81,8 @@ class WDDomain(nn.Module):
                     if x.bias is not None:
                         init.constant(x.bias, 0.0)
 
-        weight_init(self.features.modules())
-        weight_init(self._discriminator.modules())
+        # weight_init(self.features.modules())
+        # weight_init(self._discriminator.modules())
         weight_init(self.classifier.modules())
 
     def load_cls(self, cls_path=None, ft_path=None):
@@ -92,18 +105,18 @@ class WDDomain(nn.Module):
             if not self.cls_train:
                 X = self.features(x_s) # X
                 G = self.features(x_t) # G
-                # X_n = self.normalize(X)
-                # G_n = self.normalize(G)
+                X = self.normalize(X)
+                G = self.normalize(G)
                 D_ = self._discriminator(G)
                 D = self._discriminator(X)
                 return X, G, D_, D
             else:
                 X = self.features(x_s)
-                G = self.features(x_t)
-                D_ = self._discriminator(G)
-                D = self._discriminator(X)
+                # G = self.features(x_t)
+                # D_ = self._discriminator(G)
+                # D = self._discriminator(X)
                 out = self.classifier(X)
-                return D_, D, out
+                return out, out, out
             
         else:
             x_s = self.features(x_s)

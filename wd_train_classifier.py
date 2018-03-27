@@ -23,13 +23,13 @@ from tqdm import *
 
 data_transforms = {
     'train': transforms.Compose([
-        transforms.RandomSizedCrop(224),
+        transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ]),
     'val': transforms.Compose([
-        transforms.Scale(256),
+        transforms.Resize(256),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
@@ -45,7 +45,8 @@ use_gpu = True and torch.cuda.is_available()
 train_dir = domainData['amazon'] # 'amazon', 'dslr', 'webcam'
 val_dir = domainData['webcam']
 num_classes = NUM_CLASSES['office']
-
+EPOCHS = 50
+CONFIG = 11
 log = False
 exp_name = 'wd_jstCls_Rsnt2blk'
 if log:
@@ -64,24 +65,51 @@ image_datasets = {'train' : datasets.ImageFolder(train_dir,
                  }
 dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=32,
                                              shuffle=True, num_workers=4)
-              for x in ['train']}
-dataset_sizes = {x: len(image_datasets[x]) for x in ['train']}
+              for x in ['train', 'val']}
+dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
 class_names = image_datasets['train'].classes
 
-def train_model(model, clscriterion, optimizer, num_epochs=15):
+def test_model(model_ft, criterion, save_model=False, save_name=None):
+    data_iter = iter(dataloaders['val'])
+    model_ft.eval()
+    acc_val = 0
+    for data in data_iter:
+        img, lbl = data
+        if use_gpu:
+            img = img.cuda()
+            lbl = lbl.cuda()
+        img = Variable(img)
+        lbl = Variable(lbl)
+
+        out = model_ft(img)
+        _, preds = torch.max(out.data, 1)
+        loss = criterion(out, lbl)
+        acc_val += torch.sum(preds == lbl.data)
+    acc = acc_val / dataset_sizes['val']
+    print("validation accuracy: {:.4f}".format(acc))
+    if save_model:
+        torch.save(model_ft.state_dict(), save_name)
+    return
+
+def train_model(model, clscriterion, optimizer, lr_scheduler=None, num_epochs=15):
     since = time.time()
+
+    print("start training")
 
     best_acc = 0.0
     all_acc = []
 
-    for epoch in tqdm(range(num_epochs)):
-        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
-        print('-' * 10)
+    for epoch in range(num_epochs):
+        # print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+        # print('-' * 10)
 
         # 0 - source 1 - target
         srcdata = iter(dataloaders['train'])
         
         model.train() # training mode
+
+        if lr_scheduler:
+            lr_scheduler.step()
         
         running_clsloss = 0.0
         running_corrects = 0
@@ -105,10 +133,7 @@ def train_model(model, clscriterion, optimizer, num_epochs=15):
             # source data
             srcoutput = model(srcinps)
             _, preds = torch.max(srcoutput.data, 1)
-            clsloss = clscriterion(srcoutput, srclbls)
-#             print("lblb: ", srcoutput[0])
-#             print("srclbls: ", srclbls)
-            
+            clsloss = clscriterion(srcoutput, srclbls)         
 
             clsloss.backward()
             optimizer.step()
@@ -121,22 +146,24 @@ def train_model(model, clscriterion, optimizer, num_epochs=15):
         epoch_acc = running_corrects / dataset_sizes['train']
         all_acc += [epoch_acc]
 
-        print('Classification Loss: {:.4f} Acc: {:.4f}'.format(
-        epoch_clsloss, epoch_acc))
+        # print('Classification Loss: {:.4f} Acc: {:.4f}'.format(
+        # epoch_clsloss, epoch_acc))
+
+        if log:
+            logger.scalar_summary("loss", epoch_clsloss, epoch)
+            logger.scalar_summary("accuracy", epoch_acc, epoch)
 
         if best_acc < epoch_acc:
             best_acc = epoch_acc
-        print()
+
+        if epoch % 10 == 0:
+            test_model(model_ft, clscriterion)
 
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(
         time_elapsed // 60, time_elapsed % 60))
     print('Best val Acc: {:4f}'.format(best_acc))
     print('Mean Acc: {:4f}'.format(np.mean(all_acc)))
-
-    if log:
-        logger.scalar_summary("loss", epoch_clsloss, epoch)
-        logger.scalar_summary("accuracy", epoch_acc, epoch)
 
     return
 
@@ -146,15 +173,16 @@ class _Features(nn.Module):
         super(_Features, self).__init__()
         self.basenet = None
         self.extra = None
-        self.config = 2
+        self.extra1 = None
+        self.config = CONFIG
         if self.config == 1:
             self.basenet = nn.Sequential(nn.Conv2d(3,16,4,stride=2), nn.ReLU(inplace=True), nn.Conv2d(16,24,3,2), nn.ReLU(inplace=True), nn.Conv2d(24,32,3,2), nn.ReLU(inplace=True), nn.Conv2d(32,64,5,2), nn.ReLU(inplace=True), nn.Conv2d(64,128,5,2), nn.ReLU(inplace=True), nn.Conv2d(128,512,4,2), nn.ReLU(inplace=True))
-            # train: 0.57, val: 0.40
+            # train: 0.57
         elif self.config == 2:
             resnet = models.resnet18(pretrained=True)
             self.basenet = nn.Sequential(*list(resnet.children())[:-4])
             self.extra = nn.Sequential(nn.AvgPool2d(7,7), flatten(), nn.ReLU(inplace=True), nn.Linear(2048, 512), nn.ReLU(inplace=True))
-            #train: 0.80, val: 0.67
+            #train: 0.80, val: 0.20 (Amazon -> Webcam)
         elif self.config == 3:
             self.basenet = nn.Sequential(flatten(), nn.Linear(3*224*224, 512), nn.ReLU(inplace=True))
             # train: 0.04
@@ -167,6 +195,92 @@ class _Features(nn.Module):
             self.basenet = nn.Sequential(nn.Conv2d(3,16,4,2), nn.ReLU(inplace=True),
                             nn.AvgPool2d(7,7), flatten(), nn.Linear(16*15*15, 512), nn.ReLU(inplace=True)
                 )
+        elif self.config == 6:
+            resnet = models.resnet18(pretrained=True)
+            self.basenet = nn.Sequential(*list(resnet.children())[:-1])
+            self.extra = nn.Sequential(flatten())
+
+        elif self.config == 7:
+            resnet = models.resnet18(pretrained=True)
+            params = []
+            params += list(resnet.conv1.parameters())
+            params += list(resnet.bn1.parameters())
+            params += list(resnet.layer1.parameters())
+            params += list(resnet.layer2.parameters())
+            # params += list(resnet.layer3.parameters())
+            # params += list(resnet.layer4.parameters())
+            for x in params:
+                x.requires_grad=False
+            resnet.fc = flatten()
+            self.basenet = resnet
+            # self.extra = nn.Sequential(flatten())
+            # train: 0.92 val: 0.28 (Amazon -> Webcam, 50 epoch)
+
+        elif self.config == 8:
+            alexnet = models.alexnet(pretrained=True)
+            for x in alexnet.features.parameters():
+                x.requires_grad = False
+            self.basenet = nn.Sequential(*list(alexnet.features.children()))
+            self.extra = nn.Sequential(flatten(), nn.Linear(9216, 4096), nn.ReLU(inplace=True), nn.Linear(4096, 512), nn.ReLU(inplace=True))
+            # train: 0.89 val: 0.36
+
+        elif self.config == 9:
+            alexnet = models.alexnet(pretrained=True)
+            self.basenet = nn.Sequential(*list(alexnet.features.children()))
+            self.extra = nn.Sequential(flatten(), nn.Linear(9216, 4096), nn.ReLU(inplace=True), nn.Linear(4096, 512), nn.ReLU(inplace=True))
+            f_layers = [0,1,2,3,4,5,6]
+            for x in f_layers:
+                for y in self.basenet[x].parameters():
+                    y.requires_grad=False
+            print("train params: ")
+            for x in self.basenet.parameters():
+                print(x.requires_grad)
+
+        elif self.config == 10:
+            resnet = models.resnet34(pretrained=True)
+            params = []
+            params += list(resnet.conv1.parameters())
+            params += list(resnet.bn1.parameters())
+            params += list(resnet.layer1.parameters())
+            params += list(resnet.layer2.parameters())
+            params += list(resnet.layer3.parameters())
+            # params += list(resnet.layer4.parameters())
+            for x in params:
+                x.requires_grad=False
+            resnet.fc = flatten()
+            self.basenet = resnet
+            # self.extra = nn.Sequential(flatten())
+            # train: 0.86 val: 0.68 (Amazon -> Webcam, 50 epoch)
+
+        elif self.config == 11:
+            resnet = models.resnet50(pretrained=True)
+            params = []
+            params += list(resnet.conv1.parameters())
+            params += list(resnet.bn1.parameters())
+            params += list(resnet.layer1.parameters())
+            params += list(resnet.layer2.parameters())
+            params += list(resnet.layer3.parameters())
+            # params += list(resnet.layer4.parameters())
+            for x in params:
+                x.requires_grad=False
+            resnet.fc = nn.Sequential(flatten(), nn.Linear(2048, 512))
+            self.basenet = resnet
+            self.extra = None
+            # train: 0.86 val: 0.68 (Amazon -> Webcam, 50 epoch)
+
+
+        def weight_init(gen):
+            for x in gen:
+                if isinstance(x, nn.Conv2d) or isinstance(x, nn.ConvTranspose2d):
+                    init.xavier_uniform(x.weight, gain=np.sqrt(2))
+                    if x.bias is not None:
+                        init.constant(x.bias, 0.1)
+                elif isinstance(x, nn.Linear):
+                    init.xavier_uniform(x.weight)
+                    if x.bias is not None:
+                        init.constant(x.bias, 0.0)
+        if self.extra:
+            weight_init(self.extra.modules())
 
 
     def forward(self, x):
@@ -221,8 +335,34 @@ if use_gpu:
 
 clscriterion = nn.CrossEntropyLoss()
 
-optimizer = optim.Adam(model_ft.parameters(), lr=1e-3, weight_decay=1e-4) # optimize all parameters
-# optimizer = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+params = None
 
-train_model(model_ft, clscriterion, optimizer, num_epochs=50)
+if CONFIG == 9:
+    params = [
+    { 'params' : [x for x in model_ft.features.basenet[8].parameters() if x.requires_grad == True], 'lr' : 2e-6},
+    { 'params' : [x for x in model_ft.features.basenet[10].parameters() if x.requires_grad == True], 'lr' : 2e-6},
+    { 'params' : [x for x in model_ft.features.extra.parameters() if x.requires_grad == True], 'lr' : 1e-3, 'weight_decay' : 1e-4},
+    { 'params' : [x for x in model_ft.classifier.parameters() if x.requires_grad == True], 'lr' : 1e-3, 'weight_decay' : 1e-4}
+    ]
+    # best with Adamax
+elif CONFIG in [7, 10, 11]:
+    params = [
+    # {'params' : model_ft.features.basenet.layer3.parameters(), 'lr' : 2e-4 },
+    {'params' : model_ft.features.basenet.layer4.parameters(), 'lr' : 2e-4 },
+    {'params' : model_ft.classifier.parameters(), 'lr' : 1e-3, 'weight_decay' : 1e-4}
+    ]
+    # best with Adam -> train: 0.837416 val: 0.6214
+else:
+    params=[
+    {'params' : model_ft.parameters(), 'lr' : 1e-3, 'weight_decay' : 1e-4}
+
+    ]
+optimizer = optim.Adam(params) # optimize all parameters
+# optimizer = optim.SGD([ x for x in model_ft.parameters() if x.requires_grad == True], lr=0.001, momentum=0.9)
+
+lr_scheduler = lr_scheduler.ExponentialLR(optimizer, 0.1)
+
+train_model(model_ft, clscriterion, optimizer, lr_scheduler, num_epochs=EPOCHS)
 # model_ft.save_dict()
+
+test_model(model_ft, clscriterion)
