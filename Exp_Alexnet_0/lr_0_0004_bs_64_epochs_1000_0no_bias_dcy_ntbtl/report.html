@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+        <html>
+        <style>
+        img {
+            float: right;
+        }
+        img.one {
+            height: auto;
+            width: auto;
+        }
+        </style>
+        <body>
+        <h4>HyperParams</h4>
+        <table><img src="./acc1.png" alt="Accuracy plots" width="80%" height="auto" style="margin-left:15px;">
+        <tr>
+            <th>Param</th><th>Value</th>
+        </tr><tr><td>src </td><td> amazon</td></tr><tr><td>tar </td><td> webcam</td></tr><tr><td>manual_seed </td><td> 1</td></tr><tr><td>batchSize </td><td> 64</td></tr><tr><td>use_gpu </td><td> True</td></tr><tr><td>num_classes </td><td> 31</td></tr><tr><td>epochs </td><td> 1000</td></tr><tr><td>momentum </td><td> 0.9</td></tr><tr><td>lr </td><td> 0.0004</td></tr><tr><td>lr_sch </td><td> No</td></tr><tr><td>lr_sch_gamma </td><td> 0.1</td></tr><tr><td>p_lr_decay </td><td> 1000</td></tr><tr><td>n0 </td><td> 1.0</td></tr><tr><td>alpha </td><td> 10</td></tr><tr><td>beta </td><td> 0.75</td></tr><tr><td>betas </td><td> (0.5, 0.99)</td></tr><tr><td>net_wtDcy </td><td> 1e-05</td></tr><tr><td>net_biasDcy </td><td> 0.0</td></tr><tr><td>net_wtLR </td><td> 1</td></tr><tr><td>net_biasLR </td><td> 2</td></tr><tr><td>btl_wtDcy </td><td> 1e-05</td></tr><tr><td>btl_biasDcy </td><td> 0.0</td></tr><tr><td>btl_wtLR </td><td> 10</td></tr><tr><td>btl_biasLR </td><td> 20</td></tr><tr><td>srcDataLen </td><td> 2817</td></tr><tr><td>tarDataLen </td><td> 795</td></tr></table>
+<h4>Classifier Network</h4>Model(
+  (classifier): Sequential(
+    (0): Linear(in_features=4096, out_features=256, bias=True)
+    (1): ReLU(inplace)
+    (2): Linear(in_features=256, out_features=31, bias=True)
+  )
+)
+<h4>Base Network - Alexnet</h4>Sequential(
+  (0): Conv2d(3, 96, kernel_size=(11, 11), stride=(4, 4))
+  (1): ReLU(inplace)
+  (2): LocalResponseNorm(5, alpha=0.0001, beta=0.75, k=1)
+  (3): MaxPool2d(kernel_size=(3, 3), stride=(2, 2), dilation=(1, 1), ceil_mode=True)
+  (4): Conv2d(96, 256, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2), groups=2)
+  (5): ReLU(inplace)
+  (6): LocalResponseNorm(5, alpha=0.0001, beta=0.75, k=1)
+  (7): MaxPool2d(kernel_size=(3, 3), stride=(2, 2), dilation=(1, 1), ceil_mode=True)
+  (8): Conv2d(256, 384, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+  (9): ReLU(inplace)
+  (10): Conv2d(384, 384, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=2)
+  (11): ReLU(inplace)
+  (12): Conv2d(384, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=2)
+  (13): ReLU(inplace)
+  (14): MaxPool2d(kernel_size=(3, 3), stride=(2, 2), dilation=(1, 1), ceil_mode=True)
+  (15): Lambda(
+  )
+  (16): Sequential(
+    (0): Lambda(
+    )
+    (1): Linear(in_features=9216, out_features=4096, bias=True)
+  )
+  (17): ReLU(inplace)
+  (18): Dropout(p=0.5)
+  (19): Sequential(
+    (0): Lambda(
+    )
+    (1): Linear(in_features=4096, out_features=4096, bias=True)
+  )
+  (20): ReLU(inplace)
+  (21): Dropout(p=0.5)
+)
+<h4>Layers frozen</h4>
+<span style="font-weight:bold">0.weight</span> False
+<span style="font-weight:bold">0.bias</span> False
+<span style="font-weight:bold">4.weight</span> False
+<span style="font-weight:bold">4.bias</span> False
+<span style="font-weight:bold">8.weight</span> False
+<span style="font-weight:bold">8.bias</span> False
+<span style="font-weight:bold">10.weight</span> True
+<span style="font-weight:bold">10.bias</span> True
+<span style="font-weight:bold">12.weight</span> True
+<span style="font-weight:bold">12.bias</span> True
+<span style="font-weight:bold">16.1.weight</span> True
+<span style="font-weight:bold">16.1.bias</span> True
+<span style="font-weight:bold">19.1.weight</span> True
+<span style="font-weight:bold">19.1.bias</span> True
+</body></html>

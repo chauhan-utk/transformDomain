@@ -1,3 +1,7 @@
+'''
+Extract features from a base network and provide generator, critic and a classifier for those features.
+'''
+
 import torch
 import torch.nn as nn
 import torch.autograd as autograd
@@ -14,7 +18,7 @@ class _Discriminator(nn.Module):
     def __init__(self, bn=False):
         super(_Discriminator, self).__init__()
         # activation_fn = nn.ReLU(inplace=True)
-        activation_fn = LReLU()
+        activation_fn = nn.LeakyReLU(0.2)
         if bn:
             self.net = nn.Sequential(
                 nn.Linear(512, 256, bias=False), 
@@ -25,9 +29,8 @@ class _Discriminator(nn.Module):
             )
         else:
             self.net = nn.Sequential(
-                nn.Linear(512, 256), activation_fn,
-                # nn.Linear(256,128), activation_fn,
-                nn.Linear(256,1)
+                nn.Linear(512,128), activation_fn,
+                nn.Linear(128,1)
             )
 
     def forward(self, x):
@@ -38,7 +41,7 @@ class _Features(nn.Module):
     """
     Input size: [batch_size, 3, 224, 224]
     """
-    def __init__(self):
+    def __init__(self, activation_fn=nn.LeakyReLU()):
         super(_Features, self).__init__()
         resnet = models.resnet50(pretrained=True)
         params = []
@@ -50,7 +53,7 @@ class _Features(nn.Module):
         # params += list(resnet.layer4.parameters())
         for x in params:
             x.requires_grad=False
-        resnet.fc = nn.Sequential(flatten(), nn.Linear(2048, 512))
+        resnet.fc = nn.Sequential(flatten(), nn.Linear(2048, 512), activation_fn)
         self.basenet = resnet
         self.extra = None
         
@@ -61,43 +64,31 @@ class _Features(nn.Module):
         return x
 
 class _Classifier(nn.Module):
-    def __init__(self, num_classes=None):
+    def __init__(self, num_classes=None, activation_fn = LReLU()):
         super(_Classifier, self).__init__()
         # activation_fn = nn.ReLU(inplace=True)
-        activation_fn = LReLU()
         self.net = nn.Sequential(
-            nn.Linear(512, 128), activation_fn,
-            # nn.Linear(256, 128), activation_fn,
-            nn.Linear(128, num_classes)
+            nn.Linear(512, num_classes)
             )
     def forward(self, x):
         out = self.net(x)
         return out
 
 class WDDomain(nn.Module):
-    def __init__(self, num_classes=None, bn=False):
+    def __init__(self, num_classes=None, eps=0.5, bn=False):
         super(WDDomain, self).__init__()
         assert num_classes != None, "Specify num_classes"
         self.features = _Features()
         # activation_fn = nn.ReLU(inplace=True)
         activation_fn = LReLU()
         self.num_classes = num_classes
+        self.eps = eps
         self.cls_train = False
         self.bn = bn
         self._discriminator = _Discriminator(bn=self.bn)
         self.normalize = RangeNormalize(-1,1)
         self.classifier = _Classifier(self.num_classes)
-        def weight_init(gen):
-            for x in gen:
-                if isinstance(x, nn.Conv2d) or isinstance(x, nn.ConvTranspose2d):
-                    init.xavier_uniform(x.weight, gain=np.sqrt(2))
-                    if x.bias is not None:
-                        init.constant(x.bias, 0.1)
-                elif isinstance(x, nn.Linear):
-                    init.xavier_uniform(x.weight)
-                    if x.bias is not None:
-                        init.constant(x.bias, 0.0)
-
+        
         # weight_init(self.features.modules())
         weight_init(self._discriminator.modules())
         if isinstance(self.features.basenet.fc, nn.Sequential):
@@ -119,27 +110,21 @@ class WDDomain(nn.Module):
         except:
             print("Error in loading the saved weights")
 
-    def forward(self, x_s, x_t):
+    def forward(self, x):
         if self.training:
             # assert x_t != None, "give target input for training"
             # print(type(x_s), type(x_t))
             if not self.cls_train:
-                X = self.features(x_s) # X
-                G = self.features(x_t) # G
-                X = self.normalize(X)
-                G = self.normalize(G)
-                D_ = self._discriminator(G)
-                D = self._discriminator(X)
-                return X, G, D_, D
+                X = self.features(x)
+                X_ = self.normalize(X)
+                out = self._discriminator(X_)
+                return X_, out
             else:
-                X = self.features(x_s)
-                # G = self.features(x_t)
-                # D_ = self._discriminator(G)
-                # D = self._discriminator(X)
+                X = self.features(x)
                 out = self.classifier(X)
-                return out, out, out
+                return out
             
         else:
-            x_s = self.features(x_s)
-            out = self.classifier(x_s)
+            x = self.features(x)
+            out = self.classifier(x)
             return out

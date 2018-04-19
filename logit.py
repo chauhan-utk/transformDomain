@@ -1,5 +1,8 @@
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.init as init
+from torch.autograd import Variable
 
 class Logit(nn.Module):
     def __init__(self):
@@ -8,6 +11,26 @@ class Logit(nn.Module):
         lg = torch.log(x)
         lg_ = torch.log(1.-x)
         return lg - lg_
+
+class LReLU(nn.Module):
+    def __init__(self, leak=0.2):
+        super(LReLU, self).__init__()
+        self.f1 = 0.5 * (1 + leak)
+        self.f2 = 0.5 * (1 - leak)
+
+    def forward(self, x):
+        return self.f1 * x + self.f2 * torch.abs(x)
+
+def weight_init(gen):
+    for x in gen:
+        if isinstance(x, nn.Conv2d) or isinstance(x, nn.ConvTranspose2d):
+            init.xavier_normal(x.weight.data, gain=np.sqrt(2))
+            if x.bias is not None:
+                init.constant(x.bias.data, 0.)
+            elif isinstance(x, nn.Linear):
+                init.xavier_normal(x.weight.data)
+                if x.bias is not None:
+                    init.constant(x.bias.data, 0.)
 
 def interpolate(x1, x2, eps=0.5):
     '''
@@ -61,3 +84,24 @@ class RangeNormalize(object):
             _input = _input.mul(a).add(b)
             outputs.append(_input)
         return outputs if idx > 1 else outputs[0]
+
+class L2_Loss(nn.Module):
+    def __init__(self):
+        super(L2_Loss, self).__init__()
+    def forward(self, x):
+        return torch.sum(x ** 2) / 2
+
+class softmax_cross_entropy_with_logits(nn.Module):
+    def __init__(self, num_classes=None):
+        super(softmax_cross_entropy_with_logits, self).__init__()
+        assert num_classes!=None, "Provide number of classes"
+        self.num_classes = num_classes
+        self.softmax = nn.Softmax(dim=1)
+    def forward(self, logits=None, labels=None):
+        ones = torch.sparse.torch.eye(self.num_classes)
+        if labels.is_cuda:
+            ones = ones.cuda()
+        ones = Variable(ones, requires_grad=False)
+        labels_one_hot = torch.index_select(ones, 0, labels)
+        logits_softmax = self.softmax(logits)
+        return (-torch.sum(labels_one_hot * torch.log(logits_softmax), dim=1)).mean()

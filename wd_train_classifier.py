@@ -1,5 +1,10 @@
 # Code taken from here : http://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
 
+import os
+
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
+
 from config import domainData
 from config import num_classes as NUM_CLASSES
 import torch
@@ -23,14 +28,15 @@ from tqdm import *
 
 data_transforms = {
     'train': transforms.Compose([
-        transforms.RandomResizedCrop(224),
+        transforms.Resize(224),
+        # transforms.CenterCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ]),
     'val': transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
+        transforms.Resize(224),
+        # transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ]),
@@ -45,8 +51,14 @@ use_gpu = True and torch.cuda.is_available()
 train_dir = domainData['amazon'] # 'amazon', 'dslr', 'webcam'
 val_dir = domainData['webcam']
 num_classes = NUM_CLASSES['office']
-EPOCHS = 50
-CONFIG = 11
+EPOCHS = 500
+max_epoch_lr = 10000 # to compute decay for learning rate
+gamma = 0.001
+power = 0.75
+CONFIG = 13
+LR = 2e-3
+W_Decay = 1e-5
+BATCH_SIZE = 64
 log = False
 exp_name = 'wd_jstCls_Rsnt2blk'
 if log:
@@ -63,7 +75,7 @@ image_datasets = {'train' : datasets.ImageFolder(train_dir,
                   'val' : datasets.ImageFolder(val_dir,
                                           data_transforms['val'])
                  }
-dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=32,
+dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=BATCH_SIZE,
                                              shuffle=True, num_workers=4)
               for x in ['train', 'val']}
 dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
@@ -73,6 +85,7 @@ def test_model(model_ft, criterion, save_model=False, save_name=None):
     data_iter = iter(dataloaders['val'])
     model_ft.eval()
     acc_val = 0
+    step = 0
     for data in data_iter:
         img, lbl = data
         if use_gpu:
@@ -84,8 +97,10 @@ def test_model(model_ft, criterion, save_model=False, save_name=None):
         out = model_ft(img)
         _, preds = torch.max(out.data, 1)
         loss = criterion(out, lbl)
-        acc_val += torch.sum(preds == lbl.data)
-    acc = acc_val / dataset_sizes['val']
+        acc_val += (torch.sum(preds == lbl.data)/BATCH_SIZE)
+        step = step+1
+    # acc = acc_val / dataset_sizes['val']
+    acc = acc_val / step
     print("validation accuracy: {:.4f}".format(acc))
     if save_model:
         torch.save(model_ft.state_dict(), save_name)
@@ -100,16 +115,10 @@ def train_model(model, clscriterion, optimizer, lr_scheduler=None, num_epochs=15
     all_acc = []
 
     for epoch in range(num_epochs):
-        # print('Epoch {}/{}'.format(epoch, num_epochs - 1))
-        # print('-' * 10)
-
         # 0 - source 1 - target
         srcdata = iter(dataloaders['train'])
         
         model.train() # training mode
-
-        if lr_scheduler:
-            lr_scheduler.step()
         
         running_clsloss = 0.0
         running_corrects = 0
@@ -141,6 +150,21 @@ def train_model(model, clscriterion, optimizer, lr_scheduler=None, num_epochs=15
             running_clsloss += clsloss.data[0] * srcinps.size(0)
             running_corrects += torch.sum(preds == srclbls.data)
 
+        if lr_scheduler is not None:
+        	if lr_scheduler=='custom':
+        		# p = (epoch+1)/max_epoch_lr
+        		lr_decay = pow((1. + (epoch+1) * gamma), (-1 * power))
+        		new_lr = lr_decay * LR
+        		for param_group in optimizer.param_groups:
+        			param_group['lr'] = new_lr
+        	else:
+        		lr_scheduler.step()
+
+        # lr_scheduler = (1+(epoch+1) * 0.001) ** (-0.75)
+
+        # if lr_scheduler:
+        #     for params_group in optimizer.param_groups:
+        #         params_group['lr'] = params_group['lr'] * lr_scheduler
 
         epoch_clsloss = running_clsloss / dataset_sizes['train']
         epoch_acc = running_corrects / dataset_sizes['train']
@@ -175,6 +199,7 @@ class _Features(nn.Module):
         self.extra = None
         self.extra1 = None
         self.config = CONFIG
+        self.activation_fn = nn.LeakyReLU(0.2)
         if self.config == 1:
             self.basenet = nn.Sequential(nn.Conv2d(3,16,4,stride=2), nn.ReLU(inplace=True), nn.Conv2d(16,24,3,2), nn.ReLU(inplace=True), nn.Conv2d(24,32,3,2), nn.ReLU(inplace=True), nn.Conv2d(32,64,5,2), nn.ReLU(inplace=True), nn.Conv2d(64,128,5,2), nn.ReLU(inplace=True), nn.Conv2d(128,512,4,2), nn.ReLU(inplace=True))
             # train: 0.57
@@ -266,7 +291,24 @@ class _Features(nn.Module):
             resnet.fc = nn.Sequential(flatten(), nn.Linear(2048, 512))
             self.basenet = resnet
             self.extra = None
-            # train: 0.86 val: 0.68 (Amazon -> Webcam, 50 epoch)
+            # train: 0.86 val: 0.72 (Amazon -> Webcam, 50 epoch)
+
+        elif self.config == 12:
+            resnet = models.resnet50(pretrained=True)
+            for x in resnet.parameters():
+                x.requires_grad = False
+            resnet.fc = nn.Sequential(
+                flatten(), nn.Linear(2048, 512),
+                # self.activation_fn, nn.Linear(500, 100),
+                self.activation_fn
+                )
+            self.basenet = resnet
+            # train: 0.78 val: 0.65 (Amazon -> Webcam, 50 epoch)
+        elif self.config == 13:
+            alexnet = models.alexnet(pretrained=True)
+            alexnet.classifier = nn.Sequential(*list(alexnet.classifier.children())[:-1])
+            self.basenet = alexnet
+            self.extra = nn.Linear(4096,256)
 
 
         def weight_init(gen):
@@ -276,9 +318,12 @@ class _Features(nn.Module):
                     if x.bias is not None:
                         init.constant(x.bias, 0.1)
                 elif isinstance(x, nn.Linear):
-                    init.xavier_uniform(x.weight)
+                    init.xavier_normal(x.weight.data)
                     if x.bias is not None:
-                        init.constant(x.bias, 0.0)
+                        init.constant(x.bias.data, 0.1)
+
+        # if isinstance(self.basenet.fc, nn.Sequential):
+        #     weight_init(self.basenet.fc.modules())
         if self.extra:
             weight_init(self.extra.modules())
 
@@ -294,9 +339,7 @@ class GRLModel(nn.Module):
         super(GRLModel, self).__init__()
         activation_fn = nn.ReLU(inplace=True)
         self.features = _Features()
-        self.classifier = nn.Sequential(
-            nn.Linear(512, num_classes)
-            )
+        self.classifier = nn.Linear(256, num_classes)
         #weight initialization
         def weight_init(gen):
             for x in gen:
@@ -352,15 +395,55 @@ elif CONFIG in [7, 10, 11]:
     {'params' : model_ft.classifier.parameters(), 'lr' : 1e-3, 'weight_decay' : 1e-4}
     ]
     # best with Adam -> train: 0.837416 val: 0.6214
+elif CONFIG == 12:
+    params = [
+    {'params' : model_ft.features.basenet.fc.parameters(), 'lr' : 1e-3, 'weight_decay' : 1e-4},
+    {'params' : model_ft.classifier.parameters(), 'lr' : 1e-3, 'weight_decay' : 1e-4}
+
+    ]
+elif CONFIG == 13:
+	ct = 0
+	for child in model_ft.features.basenet.features.children():
+		if ct<=7:
+			ct = ct+1
+			for params in child.parameters():
+				params.requires_grad=False
+	for name, params in model_ft.features.named_parameters():
+		print(name, params.requires_grad)
+	weight_params = []
+	bias_params = []
+	for name, params in model_ft.features.basenet.features.named_parameters():
+	    if name=='8.weight' or name=='10.weight':
+	        weight_params += [params]
+	    elif name=='8.bias' or name=='10.bias':
+	        bias_params += [params]
+	for name, params in model_ft.features.basenet.classifier.named_parameters():
+	    if 'weight' in name:
+	        weight_params += [params]
+	    elif 'bias' in name:
+	        bias_params += [params]
+	print("weight params: ", len(weight_params))
+	print("bias params: ", len(bias_params))
+	params=[
+	{'params': weight_params, 'lr': LR, 'weight_decay': W_Decay},
+	{'params': bias_params, 'lr': 2*LR, 'weight_decay': 0.},
+	{'params': model_ft.features.extra.weight, 'lr': 10*LR, 'weight_decay': W_Decay},
+	{'params': model_ft.features.extra.bias, 'lr': 20*LR, 'weight_decay': 0.},
+	{'params': model_ft.classifier.weight, 'lr': 10*LR, 'weight_decay': W_Decay},
+	{'params': model_ft.classifier.bias, 'lr': 20*LR, 'weight_decay': 0.}
+	]
+
 else:
     params=[
     {'params' : model_ft.parameters(), 'lr' : 1e-3, 'weight_decay' : 1e-4}
 
     ]
-optimizer = optim.Adam(params) # optimize all parameters
+optimizer = optim.SGD(params, momentum=0.9) # optimize all parameters
 # optimizer = optim.SGD([ x for x in model_ft.parameters() if x.requires_grad == True], lr=0.001, momentum=0.9)
 
-lr_scheduler = lr_scheduler.ExponentialLR(optimizer, 0.1)
+# lr_scheduler = lr_scheduler.ExponentialLR(optimizer, 0.1)
+# lr_scheduler = None
+lr_scheduler = 'custom'
 
 train_model(model_ft, clscriterion, optimizer, lr_scheduler, num_epochs=EPOCHS)
 # model_ft.save_dict()
