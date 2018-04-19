@@ -1,0 +1,4 @@
+Experiment log
+Epoch	ClsLoss	SrcAcc	TarAcc
+Epoch:1.0	3.1622	0.3014	0.3761
+Epoch:2.0	1.4834	0.6013	0.4088
